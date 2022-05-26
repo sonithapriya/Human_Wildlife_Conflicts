@@ -1,0 +1,69 @@
+
+var shp  = ee.FeatureCollection(polygon);
+// show the shapefile in map
+Map.setCenter(87.8550, 22.9868, 6);
+Map.addLayer(shp, {}, 'West Bengal')
+
+// select the year 
+var startyear = 2018
+var endyear = 2018
+
+// Sentinel data
+var LS7_2020 = ee.ImageCollection('COPERNICUS/S2_SR')
+  .filterBounds(shp)
+  .filterDate(startyear+'-01-01', endyear+1+'-01-01')
+
+var years = ee.List.sequence(startyear, endyear).getInfo()
+
+// filter cloud cover
+var annual_least_cc_2020 = years.map(function(year){
+  var annual_2020 = LS7_2020.filterDate(year+'-01-01', (year+1)+'-01-01')
+                  .sort('CLOUD_COVER', false) 
+  var annual_img_2020 = ee.Image(annual_2020.mosaic()).clip(shp)
+  Map.addLayer(annual_img_2020.divide(10000), {bands: ['B3', 'B2', 'B1'], min: 0, max: 0.3}, year.toString())
+
+  return annual_img_2020
+})
+annual_least_cc_2020 = ee.ImageCollection(annual_least_cc_2020)
+
+// training data
+var training = water.merge(barren).merge(cropland).merge(forest).merge(urban);
+var label = 'Class';
+var bands = ['B1', 'B2', 'B3','B4', 'B5', 'B6', 'B7'];
+var input = annual_least_cc_2020.mosaic().select(bands);
+
+
+var trainImage = input.sampleRegions({
+  collection : training,
+  properties : [label],
+  scale : 30
+});
+
+var trainingData = trainImage.randomColumn();
+var trainSet = trainingData.filter(ee.Filter.lessThan('random',0.8));
+var testSet = trainingData.filter(ee.Filter.greaterThanOrEquals('random',0.8));
+
+var classifier = ee.Classifier.smileCart().train(trainSet, label, bands);
+
+var classified = input.classify(classifier);
+
+var landcoverPalette =[
+  '2f27f6', //water 
+  'b9aba3', //barren 
+  'fdfc44', //cropland
+  '228b22', //forest
+  'FF3C33' //urban 
+  ];
+
+//show classified image in map
+Map.addLayer(classified.clip(shp), {palette:landcoverPalette, min:0 , max:4}, 'Classification CART_2020');
+
+// Export the image
+Export.image.toDrive({
+  image: classified.clip(shp),
+  description: 'LULC_5_2018',
+  region: shp
+
+});
+
+
